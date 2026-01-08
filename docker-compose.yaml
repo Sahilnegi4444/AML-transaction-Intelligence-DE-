@@ -1,0 +1,195 @@
+version: '3.8'
+
+services:
+  # ===========================================
+  # KAFKA (KRaft Mode - No Zookeeper)
+  # ===========================================
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - aml_network
+
+  # ===========================================
+  # POSTGRESQL + PGVECTOR
+  # ===========================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: aml_user
+      POSTGRES_PASSWORD: aml_password
+      POSTGRES_DB: aml_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U aml_user -d aml_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aml_network
+
+  # ===========================================
+  # REDIS (Caching Layer)
+  # ===========================================
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aml_network
+
+  # ===========================================
+  # SPARK (Using official image with PySpark)
+  # ===========================================
+  spark:
+    image: apache/spark:3.5.0-python3
+    container_name: spark
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+      - "4040:4040"
+    environment:
+      SPARK_MODE: master
+    volumes:
+      - ./scripts:/opt/spark/work-dir/scripts
+      - ./data:/opt/spark/work-dir/data
+    command: >
+      /bin/bash -c "
+        /opt/spark/sbin/start-master.sh && 
+        /opt/spark/sbin/start-worker.sh spark://localhost:7077 &&
+        tail -f /opt/spark/logs/*
+      "
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - aml_network
+
+  # ===========================================
+  # MLFLOW (Experiment Tracking)
+  # ===========================================
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.10.0
+    container_name: mlflow
+    ports:
+      - "5000:5000"
+    environment:
+      MLFLOW_BACKEND_STORE_URI: sqlite:///mlflow.db
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+    volumes:
+      - mlflow_data:/mlflow/artifacts
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow.db --default-artifact-root /mlflow/artifacts
+    networks:
+      - aml_network
+
+  # ===========================================
+  # OLLAMA (LLM Inference with GPU)
+  # ===========================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    networks:
+      - aml_network
+
+  # ===========================================
+  # AML PYTHON APP (API + Scripts with PySpark)
+  # ===========================================
+  aml-app:
+    image: apache/spark:3.5.0-python3
+    container_name: aml-app
+    user: root
+    ports:
+      - "8000:8000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: aml_db
+      POSTGRES_USER: aml_user
+      POSTGRES_PASSWORD: aml_password
+      REDIS_URL: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP: kafka:9092
+      # Use Ollama container
+      OLLAMA_URL: http://ollama:11434
+      MLFLOW_URI: http://mlflow:5000
+    volumes:
+      - ./scripts:/app/scripts
+      - ./api:/app/api
+      - ./data:/app/data
+      - ./output:/app/output
+    working_dir: /app
+    command: >
+      /bin/bash -c "
+        pip install --quiet --no-warn-script-location fastapi uvicorn psycopg2-binary sqlalchemy pgvector redis langchain langchain-community requests httpx pandas matplotlib seaborn kafka-python PyPDF2 2>/dev/null &&
+        uvicorn api.main:app --host 0.0.0.0 --port 8000
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - aml_network
+
+# ===========================================
+# NETWORKS
+# ===========================================
+networks:
+  aml_network:
+    driver: bridge
+
+# ===========================================
+# VOLUMES
+# ===========================================
+volumes:
+  kafka_data:
+  postgres_data:
+  redis_data:
+  mlflow_data:
+  ollama_data:

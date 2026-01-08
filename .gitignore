@@ -1,0 +1,88 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.eggs/
+*.egg-info/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data files (large files)
+data/raw/*.csv
+data/raw/*.parquet
+*.csv.gz
+*.parquet
+
+# Keep regulations folder structure but ignore large PDFs
+!data/regulations/
+data/regulations/*.pdf
+
+# Docker volumes (if local)
+postgres_data/
+redis_data/
+mlflow_data/
+ollama_data/
+
+# Logs
+*.log
+logs/
+
+# Output files
+output/*.png
+output/*.html
+output/*.json
+
+# Environment
+.env
+.env.local
+*.env
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# MLflow
+mlruns/
+mlartifacts/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Build
+build/
+dist/
+*.manifest
+*.spec
+
+# Secrets
+secrets/
+*.pem
+*.key

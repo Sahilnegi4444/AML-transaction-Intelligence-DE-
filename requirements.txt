@@ -1,0 +1,45 @@
+# AML Transaction Intelligence - Python Dependencies
+# Production-stable versions for RTX 3080 (10GB VRAM) + 64GB RAM
+
+# Core Data Processing
+pyspark==3.5.1
+pandas==2.1.4
+numpy==1.26.3
+
+# Kafka Integration
+kafka-python==2.0.2
+confluent-kafka==2.3.0
+
+# Database
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.25
+pgvector==0.2.4
+
+# AI/ML Stack
+langchain==0.1.4
+langchain-community==0.0.16
+langchain-core==0.1.14
+
+# API Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Caching
+redis==5.0.1
+
+# Experiment Tracking
+mlflow==2.10.0
+
+# Document Processing
+PyPDF2==3.0.1
+pypdf==3.17.4
+
+# Visualization
+matplotlib==3.8.2
+seaborn==0.13.1
+
+# Utilities
+python-dotenv==1.0.0
+requests==2.31.0
+httpx==0.26.0
