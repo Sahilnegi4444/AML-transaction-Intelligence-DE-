@@ -29,7 +29,7 @@ CONFIG = {
     "db_url": os.getenv("DATABASE_URL", "jdbc:postgresql://postgres:5432/aml_db"),
     "db_user": os.getenv("POSTGRES_USER", "aml_user"),
     "db_password": os.getenv("POSTGRES_PASSWORD", "aml_password"),
-    "sample_size": int(os.getenv("SAMPLE_SIZE", "100000")),
+    "sample_size": int(os.getenv("SAMPLE_SIZE", "1000000")),  # 1 million rows
     # Anomaly detection thresholds
     "min_transaction_count": 2,  # count > 2
     "min_total_amount": 10000,   # OR total > 10000
