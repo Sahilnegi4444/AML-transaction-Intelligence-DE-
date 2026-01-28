@@ -2,38 +2,6 @@ version: '3.8'
 
 services:
   # ===========================================
-  # KAFKA (KRaft Mode - No Zookeeper)
-  # ===========================================
-  kafka:
-    image: apache/kafka:3.7.0
-    container_name: kafka
-    ports:
-      - "9092:9092"
-      - "9094:9094"
-    environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
-    volumes:
-      - kafka_data:/var/lib/kafka/data
-    healthcheck:
-      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1" ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    networks:
-      - aml_network
-
-  # ===========================================
   # POSTGRESQL + PGVECTOR
   # ===========================================
   postgres:
@@ -75,7 +43,7 @@ services:
       - aml_network
 
   # ===========================================
-  # SPARK (Using official image with PySpark)
+  # SPARK (PySpark for Batch Processing)
   # ===========================================
   spark:
     image: apache/spark:3.5.0-python3
@@ -138,7 +106,7 @@ services:
       - aml_network
 
   # ===========================================
-  # AML PYTHON APP (API + Scripts with PySpark)
+  # AML API (FastAPI + RAG)
   # ===========================================
   aml-app:
     image: apache/spark:3.5.0-python3
@@ -154,8 +122,6 @@ services:
       POSTGRES_PASSWORD: aml_password
       REDIS_URL: redis
       REDIS_PORT: 6379
-      KAFKA_BOOTSTRAP: kafka:9092
-      # Use Ollama container
       OLLAMA_URL: http://ollama:11434
       MLFLOW_URI: http://mlflow:5000
     volumes:
@@ -166,7 +132,7 @@ services:
     working_dir: /app
     command: >
       /bin/bash -c "
-        pip install --quiet --no-warn-script-location fastapi uvicorn psycopg2-binary sqlalchemy pgvector redis langchain langchain-community requests httpx pandas matplotlib seaborn kafka-python PyPDF2 2>/dev/null &&
+        pip install --quiet --no-warn-script-location fastapi uvicorn psycopg2-binary sqlalchemy pgvector redis langchain langchain-community requests httpx pandas matplotlib seaborn PyPDF2 2>/dev/null &&
         uvicorn api.main:app --host 0.0.0.0 --port 8000
       "
     depends_on:
@@ -188,7 +154,6 @@ networks:
 # VOLUMES
 # ===========================================
 volumes:
-  kafka_data:
   postgres_data:
   redis_data:
   mlflow_data:

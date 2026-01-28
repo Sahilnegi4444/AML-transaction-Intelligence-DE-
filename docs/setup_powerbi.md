@@ -10,13 +10,13 @@ This guide explains how to connect Power BI Desktop to the local AML Transaction
 
 ## Connection Details
 
-| Parameter | Value |
-|-----------|-------|
-| **Server** | `localhost` |
-| **Port** | `5432` |
-| **Database** | `aml_db` |
-| **Username** | `aml_user` |
-| **Password** | `aml_password` |
+| Parameter       | Value           |
+| --------------- | --------------- |
+| **Server**      | `localhost`     |
+| **Port**        | `5432`          |
+| **Database**    | `aml_db`        |
+| **Username**    | `aml_user`      |
+| **Password**    | `aml_password`  |
 
 ## Step-by-Step Instructions
 

@@ -43,3 +43,9 @@ seaborn==0.13.1
 python-dotenv==1.0.0
 requests==2.31.0
 httpx==0.26.0
+
+# ML Fine-tuning (Unsloth)
+# Install separately due to special build requirements:
+# pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+# pip install xformers trl peft accelerate bitsandbytes
+datasets>=2.16.0

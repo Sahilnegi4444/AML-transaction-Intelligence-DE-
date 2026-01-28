@@ -18,6 +18,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import redis
 try:
@@ -53,6 +54,15 @@ app = FastAPI(
     title="AML Transaction Intelligence API",
     description="RAG-based alert explanation service with caching and experiment tracking",
     version="1.0.0",
+)
+
+# Enable CORS for dashboard
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for development
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Response models
