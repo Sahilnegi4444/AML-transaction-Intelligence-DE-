@@ -798,7 +798,7 @@
         // Initialize dashboard
         document.addEventListener('DOMContentLoaded', () => {
             loadStats();
-            loadAlerts();
+            loadAlerts(1); // Load first page
             initCharts();
             setupEventListeners();
         });
@@ -831,16 +831,14 @@
             // Pagination
             document.getElementById('prevBtn').addEventListener('click', () => {
                 if (currentPage > 1) {
-                    currentPage--;
-                    renderTable();
+                    loadAlerts(currentPage - 1);
                 }
             });
 
             document.getElementById('nextBtn').addEventListener('click', () => {
-                const maxPage = Math.ceil(filteredAlerts.length / pageSize);
+                const maxPage = Math.ceil(totalAlertsCount / pageSize);
                 if (currentPage < maxPage) {
-                    currentPage++;
-                    renderTable();
+                    loadAlerts(currentPage + 1);
                 }
             });
         }
@@ -852,27 +850,42 @@
                 const alertsData = await alertsResponse.json();
 
                 document.getElementById('totalTransactions').textContent = '1,000,000';
-                document.getElementById('totalAlerts').textContent = alertsData.count?.toLocaleString() || '13,289';
+                document.getElementById('totalAlerts').textContent = alertsData.total?.toLocaleString() || '--';
                 document.getElementById('totalDocs').textContent = '529';
 
-                const rate = ((alertsData.count || 13289) / 1000000 * 100).toFixed(2);
+                const rate = ((alertsData.total || 0) / 1000000 * 100).toFixed(2);
                 document.getElementById('detectionRate').textContent = rate + '%';
             } catch (error) {
                 console.error('Error loading stats:', error);
                 document.getElementById('totalTransactions').textContent = '1,000,000';
-                document.getElementById('totalAlerts').textContent = '13,289';
-                document.getElementById('totalDocs').textContent = '529';
-                document.getElementById('detectionRate').textContent = '1.33%';
             }
         }
 
-        // Load alerts
-        async function loadAlerts() {
+        // Load alerts with server-side pagination
+        let totalAlertsCount = 0;
+        async function loadAlerts(page = 1) {
+            currentPage = page;
+            const offset = (page - 1) * pageSize;
+
+            // Show loading state
+            document.getElementById('alertsTableBody').innerHTML = `
+                <tr><td colspan="8" class="loading">
+                    <div class="loading-spinner"></div>
+                    Fetching alerts from server (Page ${page})...
+                </td></tr>
+            `;
+
             try {
-                const response = await fetch(`${API_BASE}/alerts?limit=500`);
+                const response = await fetch(`${API_BASE}/alerts?limit=${pageSize}&offset=${offset}`);
                 const data = await response.json();
+
                 allAlerts = data.alerts || [];
-                applyFiltersAndSort();
+                totalAlertsCount = data.total || 0;
+
+                // For the chart, we might want a sample or top list, 
+                // but for now, we'll use the current page's data or fetch a separate 'top' list.
+                // Keeping it simple for now.
+                renderTable();
                 updateCharts(allAlerts);
             } catch (error) {
                 console.error('Error loading alerts:', error);
@@ -941,9 +954,7 @@
         // Render table
         function renderTable() {
             const tbody = document.getElementById('alertsTableBody');
-            const startIdx = (currentPage - 1) * pageSize;
-            const endIdx = startIdx + pageSize;
-            const pageAlerts = filteredAlerts.slice(startIdx, endIdx);
+            const pageAlerts = allAlerts; // Current buffer IS the page
 
             if (!pageAlerts.length) {
                 tbody.innerHTML = `<tr><td colspan="8" class="no-results">No alerts found matching your criteria</td></tr>`;
@@ -974,13 +985,13 @@
 
         // Update pagination
         function updatePagination() {
-            const totalPages = Math.ceil(filteredAlerts.length / pageSize);
+            const totalPages = Math.ceil(totalAlertsCount / pageSize);
             const startIdx = (currentPage - 1) * pageSize + 1;
-            const endIdx = Math.min(currentPage * pageSize, filteredAlerts.length);
+            const endIdx = Math.min(currentPage * pageSize, totalAlertsCount);
 
             document.getElementById('paginationInfo').textContent =
-                filteredAlerts.length > 0
-                    ? `Showing ${startIdx}-${endIdx} of ${filteredAlerts.length} alerts`
+                totalAlertsCount > 0
+                    ? `Showing ${startIdx}-${endIdx} of ${totalAlertsCount.toLocaleString()} alerts (Page ${currentPage} of ${totalPages.toLocaleString()})`
                     : 'No alerts found';
 
             document.getElementById('prevBtn').disabled = currentPage <= 1;

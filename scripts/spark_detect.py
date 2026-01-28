@@ -1,14 +1,14 @@
 """
 AML Transaction Intelligence - PySpark Anomaly Detection
 ==========================================================
-Real-time and batch anomaly detection using PySpark.
+Batch anomaly detection using PySpark.
 
 Features:
 - Batch processing of transactions from PostgreSQL
 - 10-minute window aggregation per account
-- Anomaly detection: (count > 2) OR (total_amount > 10000)
+- Anomaly detection: (count > 2) AND (total_amount > 10000)
+- Dynamic risk scoring based on multiple factors
 - Writes detected alerts to PostgreSQL alerts table
-- Generates detection statistics and visualizations
 """
 
 import os
@@ -20,8 +20,9 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, count, sum as spark_sum, avg, min as spark_min, 
     max as spark_max, window, to_timestamp, lit, current_timestamp,
-    when, round as spark_round
+    when, round as spark_round, monotonically_increasing_id, row_number
 )
+from pyspark.sql.window import Window
 from pyspark.sql.types import (
     StructType, StructField, StringType, DoubleType, 
     IntegerType, BooleanType, TimestampType
@@ -37,11 +38,11 @@ CONFIG = {
     "db_url": os.getenv("DATABASE_URL", "jdbc:postgresql://postgres:5432/aml_db"),
     "db_user": os.getenv("POSTGRES_USER", "aml_user"),
     "db_password": os.getenv("POSTGRES_PASSWORD", "aml_password"),
-    "window_duration": "10 minutes",
+    "window_duration": "1 hour",
     "output_dir": "output/plots",
-    # Detection thresholds - OR condition
+    # Detection thresholds - AND condition
     "min_transaction_count": 2,  # count > 2
-    "min_total_amount": 10000,   # OR total > 10000
+    "min_total_amount": 10000,   # AND total > 10000
 }
 
 
@@ -81,18 +82,64 @@ def load_transactions(spark: SparkSession) -> "DataFrame":
     return df
 
 
+def calculate_dynamic_risk_score(df):
+    """
+    Calculate dynamic risk score based on multiple factors:
+    - Transaction velocity (count relative to threshold)
+    - Amount severity (total relative to threshold)
+    - Known illicit transaction ratio
+    
+    Returns score between 0.3 and 1.0
+    """
+    # Normalize transaction count: score increases with more transactions
+    # Base: 3 txns = 0.1, 10+ txns = 0.3
+    count_score = when(
+        col("transaction_count") >= 10, lit(0.30)
+    ).when(
+        col("transaction_count") >= 7, lit(0.25)
+    ).when(
+        col("transaction_count") >= 5, lit(0.20)
+    ).when(
+        col("transaction_count") >= 4, lit(0.15)
+    ).otherwise(lit(0.10))
+    
+    # Normalize amount: score increases with higher amounts
+    # Base: $10K = 0.1, $100K+ = 0.4
+    amount_score = when(
+        col("total_amount") >= 100000, lit(0.40)
+    ).when(
+        col("total_amount") >= 50000, lit(0.30)
+    ).when(
+        col("total_amount") >= 25000, lit(0.20)
+    ).when(
+        col("total_amount") >= 15000, lit(0.15)
+    ).otherwise(lit(0.10))
+    
+    # Known illicit transactions boost
+    illicit_score = when(
+        col("known_illicit_count") >= 2, lit(0.30)
+    ).when(
+        col("known_illicit_count") >= 1, lit(0.20)
+    ).otherwise(lit(0.0))
+    
+    # Combine scores: base 0.2 + count + amount + illicit
+    # Max possible: 0.2 + 0.3 + 0.4 + 0.3 = 1.0
+    # Min possible: 0.2 + 0.1 + 0.1 + 0.0 = 0.4
+    total_score = lit(0.20) + count_score + amount_score + illicit_score
+    
+    # Clamp between 0.3 and 1.0
+    return when(total_score > 1.0, lit(1.0)).when(total_score < 0.3, lit(0.3)).otherwise(total_score)
+
+
 def detect_anomalies(df) -> "DataFrame":
     """
     Detect anomalous transaction patterns using windowed aggregation.
     
-    Alert Condition: (transaction_count > 2) OR (total_amount > 10000)
-    This catches:
-    - Structuring: Many small transactions (count > 2)
-    - Large transfers: Single or few large transactions (total > 10000)
+    Alert Condition: (transaction_count > 2) AND (total_amount > 10000)
     """
     print("\n🔍 Detecting anomalies...")
     print(f"   Window: {CONFIG['window_duration']}")
-    print(f"   Condition: (count > {CONFIG['min_transaction_count']}) OR (total > ${CONFIG['min_total_amount']:,})")
+    print(f"   Condition: (count > {CONFIG['min_transaction_count']}) AND (total > ${CONFIG['min_total_amount']:,})")
     
     # Ensure timestamp is proper type
     df = df.withColumn("event_time", to_timestamp(col("timestamp")))
@@ -110,13 +157,16 @@ def detect_anomalies(df) -> "DataFrame":
         spark_sum(when(col("is_laundering") == 1, 1).otherwise(0)).alias("known_illicit_count")
     )
     
-    # Apply detection rule: OR condition
+    # Apply detection rule: AND condition
     alerts_df = windowed_df.filter(
-        (col("transaction_count") > CONFIG["min_transaction_count"]) | 
+        (col("transaction_count") > CONFIG["min_transaction_count"]) & 
         (col("total_amount") > CONFIG["min_total_amount"])
     )
     
-    # Add metadata
+    # Calculate dynamic risk score
+    risk_score_expr = calculate_dynamic_risk_score(alerts_df)
+    
+    # Add metadata with dynamic risk score
     alerts_df = alerts_df.select(
         lit("SUSPICIOUS_PATTERN").alias("alert_type"),
         col("source_account"),
@@ -125,25 +175,30 @@ def detect_anomalies(df) -> "DataFrame":
         col("avg_amount"),
         col("window.start").alias("window_start"),
         col("window.end").alias("window_end"),
-        # Risk score based on severity
-        when(
-            (col("transaction_count") > CONFIG["min_transaction_count"]) & 
-            (col("total_amount") > CONFIG["min_total_amount"]),
-            lit(0.9)  # Both conditions: HIGH risk
-        ).when(
-            col("total_amount") > CONFIG["min_total_amount"] * 2,
-            lit(0.8)  # Very large amount
-        ).when(
-            col("transaction_count") > CONFIG["min_transaction_count"] * 2,
-            lit(0.7)  # Many transactions
-        ).otherwise(lit(0.5)).alias("risk_score"),
+        spark_round(risk_score_expr, 2).alias("risk_score"),
         lit("NEW").alias("status"),
         current_timestamp().alias("created_at"),
         col("known_illicit_count")
     )
     
+    # Order by risk score descending, then by total amount
+    alerts_df = alerts_df.orderBy(col("risk_score").desc(), col("total_amount").desc())
+    
+    # Add ascending alert ID (1, 2, 3, ...)
+    window_spec = Window.orderBy(col("risk_score").desc(), col("total_amount").desc())
+    alerts_df = alerts_df.withColumn("alert_id", row_number().over(window_spec))
+    
     alert_count = alerts_df.count()
     print(f"   ✅ Detected {alert_count:,} suspicious patterns")
+    
+    # Show risk distribution
+    if alert_count > 0:
+        risk_stats = alerts_df.agg(
+            spark_round(avg("risk_score"), 2).alias("avg_risk"),
+            spark_round(spark_min("risk_score"), 2).alias("min_risk"),
+            spark_round(spark_max("risk_score"), 2).alias("max_risk")
+        ).collect()[0]
+        print(f"   Risk scores: min={risk_stats['min_risk']}, avg={risk_stats['avg_risk']}, max={risk_stats['max_risk']}")
     
     return alerts_df
 
@@ -152,7 +207,21 @@ def save_alerts(alerts_df, spark: SparkSession):
     """Save detected alerts to PostgreSQL."""
     print("\n💾 Saving alerts to PostgreSQL...")
     
-    # Write alerts to database
+    # Select columns for database (exclude alert_id, let PostgreSQL generate serial ID)
+    alerts_df = alerts_df.select(
+        "alert_type",
+        "source_account",
+        "transaction_count",
+        "total_amount",
+        "avg_amount",
+        "window_start",
+        "window_end",
+        "risk_score",
+        "status",
+        "created_at"
+    )
+    
+    # Write alerts to database (append mode)
     alerts_df.write \
         .format("jdbc") \
         .option("url", CONFIG["db_url"]) \
@@ -191,8 +260,8 @@ def create_detection_visualizations(alerts_df, output_dir: str):
     
     # Risk score distribution
     ax1 = axes[0]
-    risk_bins = [0, 0.5, 0.7, 0.9, 1.0]
-    risk_labels = ['Low', 'Medium', 'High', 'Critical']
+    risk_bins = [0, 0.5, 0.7, 0.85, 1.01]
+    risk_labels = ['Low (0.3-0.5)', 'Medium (0.5-0.7)', 'High (0.7-0.85)', 'Critical (0.85-1.0)']
     alerts_pd['risk_category'] = pd.cut(
         alerts_pd['risk_score'], 
         bins=risk_bins, 
@@ -200,15 +269,17 @@ def create_detection_visualizations(alerts_df, output_dir: str):
         include_lowest=True
     )
     
-    risk_counts = alerts_pd['risk_category'].value_counts()
+    risk_counts = alerts_pd['risk_category'].value_counts().sort_index()
     colors = ['#3498db', '#f39c12', '#e74c3c', '#8e44ad']
     
-    ax1.bar(risk_counts.index.astype(str), risk_counts.values, color=colors[:len(risk_counts)])
+    ax1.bar(range(len(risk_counts)), risk_counts.values, color=colors[:len(risk_counts)])
+    ax1.set_xticks(range(len(risk_counts)))
+    ax1.set_xticklabels([str(x) for x in risk_counts.index], rotation=15, ha='right')
     ax1.set_title('Alerts by Risk Category', fontsize=14, fontweight='bold')
     ax1.set_xlabel('Risk Category', fontsize=12)
     ax1.set_ylabel('Number of Alerts', fontsize=12)
     
-    for i, (cat, val) in enumerate(zip(risk_counts.index, risk_counts.values)):
+    for i, val in enumerate(risk_counts.values):
         ax1.annotate(f'{val:,}', xy=(i, val), ha='center', va='bottom', fontsize=11, fontweight='bold')
     
     # Transaction count vs Total amount scatter
@@ -223,7 +294,7 @@ def create_detection_visualizations(alerts_df, output_dir: str):
     )
     ax2.axhline(y=CONFIG['min_total_amount'], color='red', linestyle='--', label=f'Amount Threshold: ${CONFIG["min_total_amount"]:,}')
     ax2.axvline(x=CONFIG['min_transaction_count'], color='blue', linestyle='--', label=f'Count Threshold: {CONFIG["min_transaction_count"]}')
-    ax2.set_title('Alert Pattern Analysis\n(count > 2 OR total > $10,000)', fontsize=14, fontweight='bold')
+    ax2.set_title('Alert Pattern Analysis\n(count > 2 AND total > $10,000)', fontsize=14, fontweight='bold')
     ax2.set_xlabel('Transaction Count', fontsize=12)
     ax2.set_ylabel('Total Amount ($)', fontsize=12)
     ax2.legend(loc='upper right')
@@ -264,7 +335,7 @@ def create_detection_visualizations(alerts_df, output_dir: str):
     print(f"   ✅ Saved: top_suspicious_accounts.png")
 
 
-def print_summary(alerts_df):
+def print_summary(alerts_df, total_transactions: int):
     """Print detection summary."""
     print("\n" + "=" * 60)
     print("📋 DETECTION SUMMARY")
@@ -282,27 +353,38 @@ def print_summary(alerts_df):
         spark_sum("transaction_count").alias("total_transactions"),
         spark_round(spark_sum("total_amount"), 2).alias("total_flagged_amount"),
         spark_round(avg("risk_score"), 2).alias("avg_risk_score"),
+        spark_round(spark_min("risk_score"), 2).alias("min_risk"),
+        spark_round(spark_max("risk_score"), 2).alias("max_risk"),
         spark_sum("known_illicit_count").alias("known_illicit")
     ).collect()[0]
     
+    detection_rate = (stats['total_alerts'] / total_transactions) * 100
+    
     print(f"""
    Total Alerts Generated: {stats['total_alerts']:,}
-   Total Transactions Flagged: {int(stats['total_transactions']):,}
+   Total Transactions Analyzed: {total_transactions:,}
+   Detection Rate: {detection_rate:.2f}%
+   
    Total Flagged Amount: ${stats['total_flagged_amount']:,.2f}
-   Average Risk Score: {stats['avg_risk_score']:.2f}
+   
+   Risk Score Distribution:
+      Min: {stats['min_risk']:.2f}
+      Avg: {stats['avg_risk_score']:.2f}
+      Max: {stats['max_risk']:.2f}
+   
    Known Illicit in Flags: {int(stats['known_illicit']):,}
    
-   Detection Rule: (count > {CONFIG['min_transaction_count']}) OR (total > ${CONFIG['min_total_amount']:,})
+   Detection Rule: (count > {CONFIG['min_transaction_count']}) AND (total > ${CONFIG['min_total_amount']:,})
     """)
     
     # Show sample alerts
     print("   Top 5 Highest Risk Alerts:")
     print("   " + "-" * 50)
     
-    top_alerts = alerts_df.orderBy(col("risk_score").desc()).limit(5).collect()
-    for alert in top_alerts:
-        print(f"   Account: {alert['source_account']}")
-        print(f"      Transactions: {alert['transaction_count']}, Total: ${alert['total_amount']:,.2f}, Risk: {alert['risk_score']:.2f}")
+    top_alerts = alerts_df.orderBy(col("risk_score").desc(), col("total_amount").desc()).limit(5).collect()
+    for i, alert in enumerate(top_alerts, 1):
+        print(f"   #{i} Account: {alert['source_account']}")
+        print(f"      Txns: {alert['transaction_count']}, Total: ${alert['total_amount']:,.2f}, Risk: {alert['risk_score']:.2f}")
         print()
 
 
@@ -324,8 +406,9 @@ def main():
     try:
         # Load transactions
         df = load_transactions(spark)
+        total_transactions = df.count()
         
-        if df.count() == 0:
+        if total_transactions == 0:
             print("\n⚠️ No transactions found. Run clean_and_store.py first.")
             return
         
@@ -347,7 +430,7 @@ def main():
                 print(f"   ⚠️ Visualization generation skipped: {e}")
         
         # Print summary
-        print_summary(alerts_df)
+        print_summary(alerts_df, total_transactions)
         
         elapsed = datetime.now() - start_time
         print(f"\n⏱️  Total execution time: {elapsed.total_seconds():.1f} seconds")

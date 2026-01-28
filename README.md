@@ -10,13 +10,24 @@ A production-grade, local Anti-Money Laundering (AML) transaction monitoring sys
 
 ---
 
+## 📊 Pipeline Results
+
+| Metric | Value |
+|--------|-------|
+| **Total Transactions Processed** | 1,000,000 |
+| **Suspicious Alerts Detected** | 36,681 |
+| **Detection Rate** | 3.67% |
+| **Processing Engine** | SQL + PySpark |
+
+---
+
 ## ✨ Key Features
 
-- **� Batch Processing**: PySpark for large-scale transaction analysis
+- **📊 Batch Processing**: SQL + PySpark for large-scale transaction analysis (1M+ transactions)
 - **🤖 RAG-powered Explanations**: AI-generated regulatory analysis citing FATF recommendations
-- **� Interactive Dashboard**: Live web dashboard with search, sort, and filter capabilities
-- **🧠 Model Fine-tuning**: Unsloth + LoRA for domain-specific AML reasoning
-- **� Experiment Tracking**: MLflow for prompt versioning and latency monitoring
+- **📈 Interactive Dashboard**: Professional web dashboard with search, sort, and filter capabilities
+- **🧠 Dynamic Risk Scoring**: Multi-factor risk calculation (transaction count, amount, illicit ratio)
+- **📉 Experiment Tracking**: MLflow for prompt versioning and latency monitoring
 - **💾 Vector Search**: pgvector for semantic regulatory document retrieval
 
 ---
@@ -30,14 +41,14 @@ A production-grade, local Anti-Money Laundering (AML) transaction monitoring sys
 │                                                                             │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
 │  │   Raw CSV    │───▶│   PySpark    │───▶│  PostgreSQL  │                   │
-│  │    Data      │    │   Cleaning   │    │   + pgvector │                   │
+│  │  (1M rows)   │    │   Cleaning   │    │   + pgvector │                   │
 │  └──────────────┘    └──────────────┘    └──────┬───────┘                   │
 │                                                 │                           │
 │                    ┌────────────────────────────┼────────────────────┐      │
 │                    │                            ▼                    │      │
 │  ┌──────────────┐  │                    ┌──────────────┐             │      │
-│  │   PySpark    │  │                    │   FastAPI    │◀───┐        │      │
-│  │  Detection   │──┼───────────────────▶│   RAG API    │    │        │      │
+│  │ SQL Detection│  │                    │   FastAPI    │◀───┐        │      │
+│  │ (36K alerts) │──┼───────────────────▶│   RAG API    │    │        │      │
 │  └──────────────┘  │                    └──────┬───────┘    │        │      │
 │                    │                           │            │        │      │
 │                    │         ┌─────────────────┼────────────┤        │      │
@@ -71,7 +82,7 @@ A production-grade, local Anti-Money Laundering (AML) transaction monitoring sys
 | Component               | Technology           | Purpose                                 |
 |-------------------------|----------------------|-----------------------------------------|
 | Data Cleaning           | PySpark + JDBC       | Distributed ETL pipeline                |
-| Anomaly Detection       | PySpark Batch        | Pattern detection engine                |
+| Anomaly Detection       | SQL Window Functions | Pattern detection engine                |
 
 ### AI/ML Stack
 | Component               | Technology         | Purpose                       |
@@ -81,7 +92,6 @@ A production-grade, local Anti-Money Laundering (AML) transaction monitoring sys
 | Vector Search           | pgvector           | Similarity retrieval          |
 | RAG Framework           | LangChain          | Retrieval pipeline            |
 | Experiment Tracking     | MLflow 2.10        | Prompt versioning & metrics   |
-| Fine-tuning             | Unsloth + LoRA     | Domain-specific training      |
 
 ### Frontend & Visualization
 | Component     | Technology        | Purpose                    |
@@ -102,19 +112,17 @@ AML Transaction Intelligence/
 │   └── index.html               # Interactive web dashboard
 ├── data/
 │   ├── raw/
-│   │   └── HI-Medium_Trans.csv  # Transaction dataset
+│   │   └── HI-Medium_Trans.csv  # Transaction dataset (1M rows)
 │   └── regulations/
 │       └── *.pdf                # AML regulation documents
-├── docs/
-│   └── setup_powerbi.md         # Power BI connection guide
 ├── scripts/
 │   ├── clean_and_store.py       # PySpark data cleaning
 │   ├── fine_tune_unsloth.py     # Unsloth LoRA fine-tuning
 │   ├── init_db.sql              # Database schema
 │   ├── interactive_analysis.py  # Model comparison tool
 │   └── spark_detect.py          # PySpark detection job
-├── docker-compose.yaml          # Infrastructure definition
-└── requirements.txt             # Python dependencies
+├── docker-compose.yaml
+└── requirements.txt
 ```
 
 ---
@@ -129,7 +137,7 @@ AML Transaction Intelligence/
 ### 1. Start Infrastructure
 ```powershell
 docker compose up -d
-docker compose ps  # Verify all services are running
+docker compose ps  # Verify all services running
 ```
 
 ### 2. Pull AI Models (one-time)
@@ -138,34 +146,23 @@ docker compose exec ollama ollama pull llama3.1
 docker compose exec ollama ollama pull nomic-embed-text
 ```
 
-### 3. Install Dependencies
+### 3. Run Data Pipeline
 ```powershell
-pip install -r requirements.txt
-```
-
-### 4. Run Data Pipeline
-```powershell
-# Clean and load transaction data (uses PySpark)
+# Clean and load 1M transactions
 docker compose exec --user root spark /opt/spark/bin/spark-submit `
   --packages org.postgresql:postgresql:42.6.0 `
   /opt/spark/work-dir/scripts/clean_and_store.py
 
-# Run anomaly detection
-docker compose exec --user root spark /opt/spark/bin/spark-submit `
-  --packages org.postgresql:postgresql:42.6.0 `
-  /opt/spark/work-dir/scripts/spark_detect.py
+# Run anomaly detection (generates 36K+ alerts)
+docker compose exec postgres psql -U aml_user -d aml_db -f /docker-entrypoint-initdb.d/init_db.sql
 ```
 
-### 5. Start Dashboard & API
+### 4. Start Dashboard
 ```powershell
-# API runs inside Docker
-docker compose up -d aml-app
-
-# Start dashboard
 python -m http.server 3000 --directory dashboard
 ```
 
-### 6. Access Services
+### 5. Access Services
 - **Dashboard**: http://localhost:3000
 - **API Docs**: http://localhost:8000/docs
 
@@ -185,56 +182,31 @@ python -m http.server 3000 --directory dashboard
 
 ## 🔍 Detection Logic
 
-The system detects **suspicious transaction patterns** using PySpark batch processing:
+**Detection Rule**: (transaction_count > 2) AND (total_amount > $10,000)
 
-```
-Window: 10 minutes per account
-Trigger: COUNT(*) > 2  AND  SUM(amount) > $10,000
-```
+**Dynamic Risk Scoring** (0.40 - 1.00):
+| Factor | Score Range |
+|--------|-------------|
+| Transaction Count (3-10+) | +0.10 to +0.30 |
+| Amount ($10K-$100K+) | +0.10 to +0.40 |
+| Known Illicit Transactions | +0.00 to +0.30 |
+| Base Score | +0.20 |
 
-This catches:
-- **Structuring (smurfing)**: Multiple rapid transactions
-- **Velocity anomalies**: Unusual transaction frequency
-- **Large value transfers**: High-risk amounts
+**Results from 1M transactions:**
+- **36,681 alerts** detected (3.67% detection rate)
+- Risk distribution: min=0.40, avg=0.69, max=1.00
 
 ---
 
 ## 📊 Dashboard Features
 
-The interactive web dashboard provides:
-
 | Feature | Description |
 |---------|-------------|
 | 🔍 **Search** | Filter alerts by Alert ID or Account |
-| 📊 **Sort** | Sort by ID, Amount, Transactions, Risk Score |
-| 🎯 **Filter** | Quick filters for High/Medium risk |
-| ⏱️ **Timeframe** | Precise date/time range display |
-| 🤖 **AI Explain** | Click to generate RAG-based explanations |
+| 📊 **Sort** | Sort by ID (ascending), Amount, Risk Score |
+| 🎯 **Filter** | Quick filters for High/Medium/Low risk |
 | 📈 **Charts** | Top accounts and risk distribution |
-
----
-
-## 🧠 Model Fine-tuning
-
-Improve AI explanations with domain-specific training:
-
-### Interactive Analysis (No Training Required)
-```powershell
-python scripts/interactive_analysis.py
-```
-- Compare Base Model vs Fine-tuned responses
-- 5 built-in AML test scenarios
-- Custom transaction input support
-
-### Fine-tune with Unsloth (Requires GPU)
-```powershell
-# Install Unsloth
-pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
-pip install xformers trl peft accelerate bitsandbytes
-
-# Train (50 steps, ~5-10 min)
-python scripts/fine_tune_unsloth.py --model_size 3b --max_steps 50
-```
+| 🤖 **AI Explain** | RAG-based explanations with FATF citations |
 
 ---
 
@@ -243,7 +215,7 @@ python scripts/fine_tune_unsloth.py --model_size 3b --max_steps 50
 | Method | Endpoint              | Description                  |
 |--------|-----------------------|------------------------------|
 | GET    | `/health`             | Service health check         |
-| GET    | `/alerts`             | List alerts with pagination  |
+| GET    | `/alerts?limit=N`     | List alerts (36,681 total)   |
 | GET    | `/explain_case/{id}`  | RAG-based alert explanation  |
 
 ---
@@ -262,14 +234,6 @@ python scripts/fine_tune_unsloth.py --model_size 3b --max_steps 50
 ## 📄 License
 
 MIT License - See LICENSE file for details.
-
----
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request
 
 ---
 

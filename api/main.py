@@ -475,11 +475,22 @@ async def ingest_regulations(background_tasks: BackgroundTasks):
 
 
 @app.get("/alerts")
-async def list_alerts(limit: int = 20, status: Optional[str] = None):
-    """List recent alerts with optional status filter."""
+async def list_alerts(limit: int = 20, offset: int = 0, status: Optional[str] = None):
+    """List alerts with pagination and optional status filter."""
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    # Get total count first
+    count_query = "SELECT COUNT(*) as total FROM alerts"
+    count_params = []
+    if status:
+        count_query += " WHERE status = %s"
+        count_params.append(status)
+    
+    cursor.execute(count_query, count_params)
+    total_count = cursor.fetchone()['total']
+    
+    # Get alerts with limit and offset
     query = "SELECT * FROM alerts"
     params = []
     
@@ -487,8 +498,9 @@ async def list_alerts(limit: int = 20, status: Optional[str] = None):
         query += " WHERE status = %s"
         params.append(status)
     
-    query += " ORDER BY created_at DESC LIMIT %s"
-    params.append(limit)
+    # Use ID sorting for consistent pagination
+    query += " ORDER BY id ASC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
     
     cursor.execute(query, params)
     alerts = cursor.fetchall()
@@ -496,7 +508,13 @@ async def list_alerts(limit: int = 20, status: Optional[str] = None):
     cursor.close()
     conn.close()
     
-    return {"alerts": [dict(a) for a in alerts], "count": len(alerts)}
+    return {
+        "alerts": [dict(a) for a in alerts], 
+        "total": total_count,
+        "returned": len(alerts),
+        "limit": limit,
+        "offset": offset
+    }
 
 
 if __name__ == "__main__":
